@@ -1,0 +1,99 @@
+# Graph-backed PR review, staging pilot (#1607). Reviewed in ARKAgents and copied
+# into the pilot repository as .github/workflows/graph-review.yml.
+#
+# It never checks out or runs the PR's code: pull_request_target runs this file
+# from the default branch, and the request carries only ids and SHAs. Staging
+# re-checks everything: IAP (the submitter service account), this workflow's
+# GitHub OIDC identity (repository, exact workflow ref, event) and the PR's
+# current state. Values reach the shell only through env, never through ${{ }}.
+name: graph-review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: number
+      force:
+        description: Review again even if these commits were already reviewed
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: read
+
+concurrency:
+  group: graph-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  submit:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'graph-review') &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "invalid PR number"; exit 1; }
+          if [[ "$EVENT" == workflow_dispatch ]]; then
+            # One read, so base and head come from the same moment.
+            SHAS=$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '"\(.base.sha) \(.head.sha)"')
+            read -r BASE_SHA HEAD_SHA <<< "$SHAS"
+          fi
+          { echo "number=$PR_NUMBER"; echo "base=$BASE_SHA"; echo "head=$HEAD_SHA"; } >> "$GITHUB_OUTPUT"
+
+      - name: Sign in to Google as the submitter (IAP)
+        id: google
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.PR_REVIEW_WIF_PROVIDER }}
+          service_account: ${{ vars.PR_REVIEW_SUBMITTER }}
+          token_format: id_token
+          id_token_audience: ${{ vars.PR_REVIEW_IAP_CLIENT_ID }}
+          id_token_include_email: true
+
+      - name: Submit the review request
+        env:
+          OIDC_AUDIENCE: deepmorph-pr-review-staging
+          ENDPOINT: ${{ vars.PR_REVIEW_ENDPOINT }}
+          IAP_TOKEN: ${{ steps.google.outputs.id_token }}
+          EVENT: ${{ github.event_name }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          RUN_ID: ${{ github.run_id }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          BASE_SHA: ${{ steps.pr.outputs.base }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          set -euo pipefail
+          GITHUB_OIDC=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -r .value)
+          echo "::add-mask::$GITHUB_OIDC"
+          jq -n --argjson repository_id "$REPOSITORY_ID" --argjson pr_number "$PR_NUMBER" \
+            --arg base_sha "$BASE_SHA" --arg head_sha "$HEAD_SHA" --arg event "$EVENT" \
+            --arg run_id "$RUN_ID" --argjson force "$FORCE" \
+            '{repository_id: $repository_id, pr_number: $pr_number, base_sha: $base_sha,
+              head_sha: $head_sha, event: $event, run_id: $run_id, force: $force}' > body.json
+          curl -fsS -X POST "$ENDPOINT/pr-review/v1/jobs" \
+            -H "Proxy-Authorization: Bearer $IAP_TOKEN" \
+            -H "Authorization: Bearer $GITHUB_OIDC" \
+            -H "Content-Type: application/json" \
+            --data @body.json
