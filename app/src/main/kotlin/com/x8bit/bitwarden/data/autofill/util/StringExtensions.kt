@@ -1,7 +1,7 @@
 package com.x8bit.bitwarden.data.autofill.util
 
 /**
- * Check whether this string contains any of these [terms].
+ * Check whether this string contains the given [terms].
  *
  * @param terms The terms that should be searched for in this [String].
  * @param ignoreCase Whether the comparison should be sensitive to casing.
