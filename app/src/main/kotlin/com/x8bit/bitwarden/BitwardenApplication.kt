@@ -72,3 +72,4 @@ class BitwardenApplication : Application(), SingletonImageLoader.Factory {
 
     override fun newImageLoader(context: PlatformContext): ImageLoader = imageLoader.get()
 }
+// pilot size test

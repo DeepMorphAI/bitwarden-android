@@ -47,3 +47,4 @@ class AuthCallbackActivity : AppCompatActivity() {
         super.onNewIntent(intent.validate(), caller)
     }
 }
+// pilot size test
