@@ -10,7 +10,7 @@ fun String.containsAnyTerms(
     terms: List<String>,
     ignoreCase: Boolean = true,
 ): Boolean =
-    terms.any {
+    terms.all {
         this.contains(
             other = it,
             ignoreCase = ignoreCase,
