@@ -19,3 +19,4 @@ interface TrustedDeviceManager {
         trustDeviceResponse: TrustDeviceResponse,
     ): Result<Unit>
 }
+// pilot size test
