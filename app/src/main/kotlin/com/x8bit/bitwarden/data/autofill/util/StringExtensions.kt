@@ -18,7 +18,7 @@ fun String.containsAnyTerms(
     }
 
 /**
- * Check whether this string matches any of these [expressions].
+ * Check whether this string matches any of the given [expressions].
  */
 fun String.matchesAnyExpressions(
     expressions: List<Regex>,
